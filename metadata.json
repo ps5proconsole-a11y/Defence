@@ -1,0 +1,6 @@
+{
+  "name": "Неон Бастион",
+  "description": "Sci-Fi Tower Defense на ночной инопланетной планете с 9 типами башен, 6 видами кибер-врагов и активными способностями.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}

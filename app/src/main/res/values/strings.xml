@@ -1,0 +1,20 @@
+<resources>
+    <string name="app_name">Неон Бастион</string>
+    <string name="game_subtitle">КИБЕР-ОБОРОНА СЕКТОРА</string>
+    <string name="btn_start_defense">НАЧАТЬ ОБОРОНУ</string>
+    <string name="btn_resume">ПРОДОЛЖИТЬ</string>
+    <string name="btn_restart">ЗАНОВО</string>
+    <string name="btn_next_wave">ВОЛНА</string>
+    <string name="btn_codex">СПРАВОЧНИК</string>
+    <string name="btn_close">ЗАКРЫТЬ</string>
+    <string name="pause_title">ПАУЗА</string>
+    <string name="victory_title">СЕКТОР ЗАЩИЩЁН</string>
+    <string name="defeat_title">ШЛЮЗ ПРОРВАН</string>
+    <string name="cd_pause">Пауза</string>
+    <string name="cd_speed">Скорость игры</string>
+    <string name="cd_base_hp">Здоровье базы</string>
+    <string name="cd_gold">Кредиты</string>
+    <string name="cd_crystals">Кристаллы</string>
+    <string name="cd_wave">Текущая волна</string>
+    <string name="cd_close">Закрыть</string>
+</resources>
