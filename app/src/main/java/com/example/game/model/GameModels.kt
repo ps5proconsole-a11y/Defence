@@ -388,6 +388,8 @@ class TowerInstance(
   var shieldOverloadTimer: Float = 0f,
   var targetPriority: TargetPriority = TargetPriority.FIRST,
   var kills: Int = 0,
+  var angularVelocity: Float = 0f,
+  var targetLocked: Boolean = false,
 ) {
   fun effectiveRange(): Float {
     val mult =
@@ -456,6 +458,9 @@ class EnemyEntity {
   var animPhase: Float = 0f
   var bossAbilityTimer: Float = 5f
   var dashTimer: Float = 0f
+  var laneOffset: Float = 0f
+  var currentSpeed: Float = 0f
+  var targetAngleRad: Float = 0f
 
   fun progress(): Float = (distanceAlongPath / totalPathLength).coerceIn(0f, 1f)
 }
@@ -525,6 +530,9 @@ class LaserBeamEntity {
   var y2: Float = 0f
   var color: Color = NeonCyan
   var intensity: Float = 1f
+  var rampFraction: Float = 0f
+  var towerLevel: Int = 1
+  var targetRadius: Float = 0.02f
 }
 
 class FloatingTextEntity {

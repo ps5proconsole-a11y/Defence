@@ -118,47 +118,90 @@ fun DrawScope.drawTowerModel(
 
   val sprite = sprites?.towers?.get(tower.type)
   if (sprite != null) {
-    // 2.5D upright isometric model with subtle recoil kick + facing flip
-    val recoilPush = tower.recoil * baseRadius * 0.16f
-    val drawCenter =
-      Offset(
-        center.x - cos(tower.angleRad) * recoilPush,
-        center.y - sin(tower.angleRad) * recoilPush - baseRadius * 0.10f,
-      )
     val scaleFactor =
       when (tower.level) {
         1 -> 1.0f
         2 -> 1.06f
         else -> 1.12f
       }
-    val spriteSide = (baseRadius * 2.42f * scaleFactor).roundToInt().coerceAtLeast(16)
-    val half = spriteSide / 2
 
-    val mirrorX =
-      if (tower.type in setOf(TowerType.CANNON, TowerType.GATLING, TowerType.LASER, TowerType.MISSILE, TowerType.MORTAR) &&
-        cos(tower.angleRad) < -0.15f
-      ) {
-        -1f
-      } else {
-        1f
+    if (tower.type == TowerType.LASER) {
+      // Top-down circular turret centered at (50%, 50%) with barrel pointing UP (-90 deg)
+      val recoilPush = tower.recoil * baseRadius * 0.14f
+      val drawCenter =
+        Offset(
+          center.x - cos(tower.angleRad) * recoilPush,
+          center.y - sin(tower.angleRad) * recoilPush,
+        )
+      val spriteSide = (baseRadius * 3.05f * scaleFactor).roundToInt().coerceAtLeast(20)
+      val half = spriteSide / 2
+      val rotationDeg = Math.toDegrees(tower.angleRad.toDouble()).toFloat() + 90f
+
+      rotate(degrees = rotationDeg, pivot = drawCenter) {
+        drawImage(
+          image = sprite,
+          dstOffset = IntOffset((drawCenter.x - half).roundToInt(), (drawCenter.y - half).roundToInt()),
+          dstSize = IntSize(spriteSide, spriteSide),
+        )
       }
 
-    scale(scaleX = mirrorX, scaleY = 1f, pivot = drawCenter) {
-      drawImage(
-        image = sprite,
-        dstOffset = IntOffset((drawCenter.x - half).roundToInt(), (drawCenter.y - half).roundToInt()),
-        dstSize = IntSize(spriteSide, spriteSide),
-      )
-    }
-
-    // Subtle directional muzzle flash/emitter indicator toward target
-    if (tower.recoil > 0.25f) {
-      val tip =
-        Offset(
-          center.x + cos(tower.angleRad) * baseRadius * 0.88f,
-          center.y + sin(tower.angleRad) * baseRadius * 0.88f,
+      // Glowing plasma lens flare at the barrel aperture when locked / charging
+      val rampFrac = (tower.laserRamp / 1.8f).coerceIn(0f, 1f)
+      if (tower.targetLocked || rampFrac > 0.02f) {
+        val muzzleTip =
+          Offset(
+            drawCenter.x + cos(tower.angleRad) * (spriteSide * 0.44f),
+            drawCenter.y + sin(tower.angleRad) * (spriteSide * 0.44f),
+          )
+        val glowR = baseRadius * (0.28f + 0.18f * rampFrac)
+        drawCircle(
+          color = NeonCyan.copy(alpha = 0.42f + 0.35f * rampFrac),
+          radius = glowR,
+          center = muzzleTip,
         )
-      drawCircle(accent.copy(alpha = 0.75f * tower.recoil), radius = baseRadius * 0.28f, center = tip)
+        drawCircle(
+          color = Color.White.copy(alpha = 0.75f + 0.25f * rampFrac),
+          radius = glowR * 0.42f,
+          center = muzzleTip,
+        )
+      }
+    } else {
+      // 2.5D upright isometric model with subtle recoil kick + facing flip
+      val recoilPush = tower.recoil * baseRadius * 0.16f
+      val drawCenter =
+        Offset(
+          center.x - cos(tower.angleRad) * recoilPush,
+          center.y - sin(tower.angleRad) * recoilPush - baseRadius * 0.10f,
+        )
+      val spriteSide = (baseRadius * 2.42f * scaleFactor).roundToInt().coerceAtLeast(16)
+      val half = spriteSide / 2
+
+      val mirrorX =
+        if (tower.type in setOf(TowerType.CANNON, TowerType.GATLING, TowerType.MISSILE, TowerType.MORTAR) &&
+          cos(tower.angleRad) < -0.15f
+        ) {
+          -1f
+        } else {
+          1f
+        }
+
+      scale(scaleX = mirrorX, scaleY = 1f, pivot = drawCenter) {
+        drawImage(
+          image = sprite,
+          dstOffset = IntOffset((drawCenter.x - half).roundToInt(), (drawCenter.y - half).roundToInt()),
+          dstSize = IntSize(spriteSide, spriteSide),
+        )
+      }
+
+      // Subtle directional muzzle flash/emitter indicator toward target
+      if (tower.recoil > 0.25f) {
+        val tip =
+          Offset(
+            center.x + cos(tower.angleRad) * baseRadius * 0.88f,
+            center.y + sin(tower.angleRad) * baseRadius * 0.88f,
+          )
+        drawCircle(accent.copy(alpha = 0.75f * tower.recoil), radius = baseRadius * 0.28f, center = tip)
+      }
     }
   } else {
     drawCircle(accent, radius = baseRadius * 0.6f, center = center)

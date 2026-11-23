@@ -45,6 +45,7 @@ import com.example.ui.theme.RoadSurface
 import com.example.ui.theme.ShieldDomeBlue
 import kotlin.math.PI
 import kotlin.math.cos
+import kotlin.math.hypot
 import kotlin.math.roundToInt
 import kotlin.math.sin
 import kotlin.random.Random
@@ -62,6 +63,7 @@ fun BattlefieldCanvas(
 ) {
   val textMeasurer = rememberTextMeasurer()
   val sprites = rememberGameSprites()
+  val beamArcPath = remember { Path() }
   val stars = remember {
     val r = Random(1337)
     List(42) {
@@ -239,15 +241,20 @@ fun BattlefieldCanvas(
       drawEnemyUnit(e, Offset(e.x * w, e.y * h), e.type.radius * w, t, sprites = sprites)
     }
 
-    // 8. Continuous Glowing Laser Beams
+    // 8. Continuous Multi-Layered Plasma Laser Beams
     for (lb in engine.laserBeams) {
       if (!lb.active) continue
-      val p1 = Offset(lb.x1 * w, lb.y1 * h)
-      val p2 = Offset(lb.x2 * w, lb.y2 * h)
-      drawLine(lb.color.copy(alpha = 0.30f), p1, p2, strokeWidth = 10f * lb.intensity, cap = StrokeCap.Round)
-      drawLine(lb.color.copy(alpha = 0.85f), p1, p2, strokeWidth = 4.5f * lb.intensity, cap = StrokeCap.Round)
-      drawLine(Color.White, p1, p2, strokeWidth = 1.8f, cap = StrokeCap.Round)
-      drawCircle(Color.White, radius = 4.5f, center = p2)
+      drawBeautifulLaserBeam(
+        start = Offset(lb.x1 * w, lb.y1 * h),
+        end = Offset(lb.x2 * w, lb.y2 * h),
+        baseColor = lb.color,
+        intensity = lb.intensity,
+        rampFraction = lb.rampFraction,
+        towerLevel = lb.towerLevel,
+        time = t,
+        viewportWidth = w,
+        reusablePath = beamArcPath,
+      )
     }
 
     // 9. Projectiles
@@ -480,4 +487,161 @@ private fun DrawScope.drawJaggedArc(
   drawPath(path, color.copy(alpha = color.alpha * 0.35f), style = Stroke(width = thickness * 2.6f, cap = StrokeCap.Round))
   drawPath(path, color, style = Stroke(width = thickness, cap = StrokeCap.Round))
   drawPath(path, Color.White.copy(alpha = color.alpha * 0.85f), style = Stroke(width = (thickness * 0.4f).coerceAtLeast(1f)))
+}
+
+private fun DrawScope.drawBeautifulLaserBeam(
+  start: Offset,
+  end: Offset,
+  baseColor: Color,
+  intensity: Float,
+  rampFraction: Float,
+  towerLevel: Int,
+  time: Float,
+  viewportWidth: Float,
+  reusablePath: Path,
+) {
+  val dx = end.x - start.x
+  val dy = end.y - start.y
+  val len = hypot(dx, dy)
+  if (len < 1f) return
+
+  val ux = dx / len
+  val uy = dy / len
+  val nx = -uy
+  val ny = ux
+
+  val pxScale = (viewportWidth / 1080f).coerceIn(0.65f, 1.55f)
+  val levelScale = 1f + (towerLevel - 1) * 0.22f
+  val shimmer = 0.90f + 0.10f * sin(time * 38f + start.x * 0.05f)
+  val beamScale = pxScale * levelScale * (0.88f + rampFraction * 0.42f) * shimmer
+
+  // 1. Wide atmospheric plasma aura
+  drawLine(
+    brush =
+      Brush.linearGradient(
+        colors =
+          listOf(
+            baseColor.copy(alpha = 0.26f),
+            Color(0xFF2979FF).copy(alpha = 0.18f),
+            baseColor.copy(alpha = 0.30f),
+          ),
+        start = start,
+        end = end,
+      ),
+    start = start,
+    end = end,
+    strokeWidth = 20f * beamScale * intensity,
+    cap = StrokeCap.Round,
+  )
+
+  // 2. Electric blue energy sheath
+  drawLine(
+    color = Color(0xFF00B0FF).copy(alpha = 0.56f),
+    start = start,
+    end = end,
+    strokeWidth = 10.5f * beamScale * intensity,
+    cap = StrokeCap.Round,
+  )
+
+  // 3. Vibrant neon cyan inner beam
+  drawLine(
+    color = baseColor.copy(alpha = 0.94f),
+    start = start,
+    end = end,
+    strokeWidth = 5.2f * beamScale,
+    cap = StrokeCap.Round,
+  )
+
+  // 4. Incandescent pure white plasma filament
+  drawLine(
+    color = Color.White,
+    start = start,
+    end = end,
+    strokeWidth = (2.1f + rampFraction * 1.4f) * pxScale * levelScale,
+    cap = StrokeCap.Round,
+  )
+
+  // 5. Animated helical plasma arc weaving along the core
+  reusablePath.reset()
+  val segments = 14
+  val waveAmp = (4.2f + rampFraction * 5.2f) * pxScale * levelScale
+  for (i in 0..segments) {
+    val frac = i.toFloat() / segments
+    val env = sin(frac * PI.toFloat())
+    val wave = sin(frac * 15f - time * 28f) * waveAmp * env
+    val px = start.x + dx * frac + nx * wave
+    val py = start.y + dy * frac + ny * wave
+    if (i == 0) reusablePath.moveTo(px, py) else reusablePath.lineTo(px, py)
+  }
+  drawPath(
+    path = reusablePath,
+    color = Color(0xFFB2F5FF).copy(alpha = 0.72f + 0.25f * rampFraction),
+    style = Stroke(width = 1.6f * pxScale, cap = StrokeCap.Round, join = StrokeJoin.Round),
+  )
+
+  // 6. Fast traveling energy pulses rushing from muzzle to target
+  for (pIdx in 0..2) {
+    val phase = ((time * (3.2f + rampFraction * 1.8f) + pIdx * 0.333f) % 1f)
+    val pulsePos = Offset(start.x + dx * phase, start.y + dy * phase)
+    val pulseR = (4.0f + rampFraction * 2.8f) * pxScale * levelScale
+    drawCircle(
+      color = baseColor.copy(alpha = 0.55f),
+      radius = pulseR * 1.75f,
+      center = pulsePos,
+    )
+    drawCircle(
+      color = Color.White.copy(alpha = 0.92f),
+      radius = pulseR * 0.75f,
+      center = pulsePos,
+    )
+  }
+
+  // 7. Muzzle energy aperture flare at beam origin
+  val muzzleR = (15f + rampFraction * 6f) * pxScale * levelScale
+  drawCircle(
+    brush =
+      Brush.radialGradient(
+        colors = listOf(Color.White.copy(alpha = 0.90f), baseColor.copy(alpha = 0.50f), Color.Transparent),
+        center = start,
+        radius = muzzleR,
+      ),
+    radius = muzzleR,
+    center = start,
+  )
+  val muzzleCross = muzzleR * 0.78f
+  drawLine(
+    color = Color.White.copy(alpha = 0.85f),
+    start = Offset(start.x - nx * muzzleCross, start.y - ny * muzzleCross),
+    end = Offset(start.x + nx * muzzleCross, start.y + ny * muzzleCross),
+    strokeWidth = 1.8f * pxScale,
+    cap = StrokeCap.Round,
+  )
+
+  // 8. Thermal impact scorch glow + rotating plasma star-spikes at target
+  val impactR = (17f + rampFraction * 13f) * pxScale * levelScale * shimmer
+  val scorchColor = if (rampFraction > 0.35f) Color(0xFFFFA726).copy(alpha = 0.45f * rampFraction) else Color(0xFF2979FF).copy(alpha = 0.35f)
+  drawCircle(
+    brush =
+      Brush.radialGradient(
+        colors = listOf(Color.White, baseColor.copy(alpha = 0.80f), scorchColor, Color.Transparent),
+        center = end,
+        radius = impactR,
+      ),
+    radius = impactR,
+    center = end,
+  )
+  val spikeLen = impactR * 0.72f
+  val spin = time * 6.5f
+  for (s in 0..1) {
+    val ang = spin + s * (PI.toFloat() * 0.5f)
+    val sx = cos(ang) * spikeLen
+    val sy = sin(ang) * spikeLen
+    drawLine(
+      color = Color.White.copy(alpha = 0.88f),
+      start = Offset(end.x - sx, end.y - sy),
+      end = Offset(end.x + sx, end.y + sy),
+      strokeWidth = 2.0f * pxScale,
+      cap = StrokeCap.Round,
+    )
+  }
 }

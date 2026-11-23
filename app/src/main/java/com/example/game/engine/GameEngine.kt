@@ -34,6 +34,7 @@ import kotlinx.coroutines.flow.StateFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.flow.update
 import kotlin.math.PI
+import kotlin.math.abs
 import kotlin.math.atan2
 import kotlin.math.cos
 import kotlin.math.hypot
@@ -238,6 +239,7 @@ class GameEngine {
     }
     val slot = CanyonMap.buildSlots[slotId]
     gold -= type.baseCost
+    val initialAngle = atan2((slot.roadAnchorY - slot.y) * viewportAspect, slot.roadAnchorX - slot.x)
     val tower =
       TowerInstance(
         slotId = slot.id,
@@ -246,6 +248,7 @@ class GameEngine {
         roadAnchorX = slot.roadAnchorX,
         roadAnchorY = slot.roadAnchorY,
         type = type,
+        angleRad = initialAngle,
       )
     towers[slotId] = tower
     spawnShockwave(slot.x, slot.y, 0.09f, type.accentColor, 0.35f)
@@ -577,11 +580,15 @@ class GameEngine {
         CanyonMap.samplePathPosition(startDist)
       }
 
+    val visualAngle = atan2(sin(ang) * viewportAspect, cos(ang))
     slot.x = pos.x
     slot.y = pos.y
     slot.prevX = pos.x
     slot.prevY = pos.y
-    slot.angleRad = ang
+    slot.angleRad = visualAngle
+    slot.targetAngleRad = visualAngle
+    slot.laneOffset = if (type.isFlying) 0f else ((slot.id % 5) - 2) * 0.0055f
+    slot.currentSpeed = type.speed * 0.55f
     slot.maxHp = type.baseHp * hpMult
     slot.hp = slot.maxHp
     slot.maxShield = type.baseShield * hpMult
@@ -683,9 +690,13 @@ class GameEngine {
           else -> (1f - e.slowStrength).coerceAtLeast(0.18f)
         }
 
+      val desiredSpeed = e.type.speed * speedMult
+      val inertiaRate = if (desiredSpeed < e.currentSpeed) 10.5f else 6.5f
+      e.currentSpeed += (desiredSpeed - e.currentSpeed) * (inertiaRate * dt).coerceIn(0f, 1f)
+
       e.prevX = e.x
       e.prevY = e.y
-      e.distanceAlongPath += e.type.speed * speedMult * dt
+      e.distanceAlongPath += e.currentSpeed * dt
 
       if (e.distanceAlongPath >= e.totalPathLength) {
         // Reached base gate
@@ -698,22 +709,35 @@ class GameEngine {
 
       if (e.type.isFlying) {
         val t = (e.distanceAlongPath / e.totalPathLength).coerceIn(0f, 1f)
-        val sway = sin(e.animPhase * 0.45f) * 0.025f
+        val swayEnv = sin(t * PI.toFloat()).coerceIn(0f, 1f)
+        val sway = sin(e.animPhase * 0.45f) * 0.025f * swayEnv
         val baseX = CanyonMap.portalPosition.x + (CanyonMap.baseGatePosition.x - CanyonMap.portalPosition.x) * t
         val baseY = CanyonMap.portalPosition.y + (CanyonMap.baseGatePosition.y - CanyonMap.portalPosition.y) * t
         e.x = baseX + sway
         e.y = baseY
-        e.angleRad =
-          atan2(
-            CanyonMap.baseGatePosition.y - CanyonMap.portalPosition.y,
-            CanyonMap.baseGatePosition.x - CanyonMap.portalPosition.x,
-          )
+        val dx = e.x - e.prevX
+        val dyW = (e.y - e.prevY) * viewportAspect
+        if (hypot(dx, dyW) > 0.0001f) {
+          e.targetAngleRad = atan2(dyW, dx)
+        }
       } else {
-        val (pos, ang) = CanyonMap.samplePathPosition(e.distanceAlongPath)
-        e.x = pos.x
-        e.y = pos.y
-        e.angleRad = ang
+        val (pos, pathAng) = CanyonMap.samplePathPosition(e.distanceAlongPath)
+        val progress = e.progress()
+        val laneEnvelope =
+          when {
+            progress < 0.06f -> progress / 0.06f
+            progress > 0.90f -> ((1f - progress) / 0.10f).coerceIn(0f, 1f)
+            else -> 1f
+          }
+        val perpX = -sin(pathAng) * e.laneOffset * laneEnvelope
+        val perpY = cos(pathAng) * e.laneOffset * laneEnvelope
+        e.x = pos.x + perpX
+        e.y = pos.y + perpY / viewportAspect
+        e.targetAngleRad = atan2(sin(pathAng) * viewportAspect, cos(pathAng))
       }
+
+      val headingErr = normalizeAngle(e.targetAngleRad - e.angleRad)
+      e.angleRad = normalizeAngle(e.angleRad + headingErr * (11f * dt).coerceIn(0f, 1f))
     }
 
     // Check if wave just cleared (all spawns done + zero active enemies)
@@ -780,47 +804,69 @@ class GameEngine {
         }
 
         TowerType.LASER -> {
-          val target = findTarget(t)
+          val target = findLaserTargetWithLock(t)
           if (target != null) {
-            t.angleRad = atan2((target.y - t.y) * viewportAspect, target.x - t.x)
-            if (t.laserTargetId == target.id) {
-              t.laserRamp = (t.laserRamp + dt * 0.65f).coerceAtMost(1.8f)
-            } else {
+            if (t.laserTargetId != target.id) {
               t.laserTargetId = target.id
-              t.laserRamp = 0f
+              t.laserRamp = (t.laserRamp * 0.35f)
             }
-            val dps = t.effectiveDamage() * (1f + t.laserRamp * 0.55f) * (if (overdrive) 1.65f else 1f)
-            damageEnemy(target, dps * dt, t.slotId, ignoreArmor = true)
+            val desiredAngle = atan2((target.y - t.y) * viewportAspect, target.x - t.x)
+            val turnMax = if (overdrive) 8.4f else 6.2f
+            val angleErr = slewTurret(t, desiredAngle, maxTurnSpeed = turnMax, accelRate = 18f, dt = dt)
+            val aligned = abs(angleErr) < 0.28f
+            t.targetLocked = aligned
 
-            if (laserIdx < laserBeams.size) {
-              val beam = laserBeams[laserIdx++]
-              beam.active = true
-              val muzzleDist = 0.032f
-              beam.x1 = t.x + cos(t.angleRad) * muzzleDist
-              beam.y1 = t.y + sin(t.angleRad) * muzzleDist / viewportAspect
-              beam.x2 = target.x
-              beam.y2 = target.y
-              beam.color = NeonCyan
-              beam.intensity = 0.7f + t.laserRamp * 0.5f
-            }
-            if (rng.nextFloat() < dt * 14f) {
-              spawnBurstParticles(target.x, target.y, NeonCyan, 1, 0.06f)
+            if (aligned) {
+              t.laserRamp = (t.laserRamp + dt * 0.65f).coerceAtMost(1.8f)
+              val rampFrac = (t.laserRamp / 1.8f).coerceIn(0f, 1f)
+              val dps = t.effectiveDamage() * (1f + t.laserRamp * 0.55f) * (if (overdrive) 1.65f else 1f)
+              damageEnemy(target, dps * dt, t.slotId, ignoreArmor = true)
+              t.recoil = (0.06f + 0.08f * rampFrac).coerceAtLeast(t.recoil)
+
+              if (laserIdx < laserBeams.size) {
+                val beam = laserBeams[laserIdx++]
+                beam.active = true
+                val levelScale = 1f + (t.level - 1) * 0.06f
+                val muzzleDist = 0.066f * levelScale
+                beam.x1 = t.x + cos(t.angleRad) * muzzleDist
+                beam.y1 = t.y + sin(t.angleRad) * muzzleDist / viewportAspect
+                beam.x2 = target.x
+                beam.y2 = target.y
+                beam.color = NeonCyan
+                beam.intensity = 0.78f + rampFrac * 0.65f
+                beam.rampFraction = rampFrac
+                beam.towerLevel = t.level
+                beam.targetRadius = target.type.radius
+              }
+              if (rng.nextFloat() < dt * (14f + t.laserRamp * 10f)) {
+                val sparkColor = if (t.laserRamp > 0.7f && rng.nextFloat() < 0.45f) GoldAmber else NeonCyan
+                spawnBurstParticles(target.x, target.y, sparkColor, 1, 0.075f)
+              }
+            } else {
+              t.laserRamp = (t.laserRamp - dt * 0.75f).coerceAtLeast(0f)
             }
           } else {
             t.laserTargetId = -1
-            t.laserRamp = 0f
+            t.targetLocked = false
+            t.laserRamp = (t.laserRamp - dt * 1.4f).coerceAtLeast(0f)
+            idleSweepTurret(t, dt)
           }
         }
 
         TowerType.TESLA -> {
           val target = findTarget(t)
           if (target != null) {
-            t.angleRad = atan2((target.y - t.y) * viewportAspect, target.x - t.x)
-            if (t.cooldownTimer <= 0f) {
+            val desiredAngle = atan2((target.y - t.y) * viewportAspect, target.x - t.x)
+            val angleErr = slewTurret(t, desiredAngle, maxTurnSpeed = if (overdrive) 11f else 8.5f, accelRate = 20f, dt = dt)
+            t.targetLocked = abs(angleErr) < 0.36f
+            if (t.targetLocked && t.cooldownTimer <= 0f) {
               t.cooldownTimer = 1f / t.effectiveFireRate(overdrive)
               t.recoil = 0.8f
               fireChainLightning(t, target)
             }
+          } else {
+            t.targetLocked = false
+            idleSweepTurret(t, dt)
           }
         }
 
@@ -845,7 +891,7 @@ class GameEngine {
               }
             }
           }
-          t.angleRad += dt * 1.8f
+          t.angleRad = normalizeAngle(t.angleRad + dt * 1.8f)
         }
 
         TowerType.CANNON,
@@ -854,16 +900,101 @@ class GameEngine {
         TowerType.MORTAR -> {
           val target = findTarget(t)
           if (target != null) {
-            t.angleRad = atan2((target.y - t.y) * viewportAspect, target.x - t.x)
-            if (t.cooldownTimer <= 0f) {
+            val (aimX, aimY) = predictTargetPosition(t, target, dt)
+            val desiredAngle = atan2((aimY - t.y) * viewportAspect, aimX - t.x)
+            val baseTurn =
+              when (t.type) {
+                TowerType.GATLING -> 10.5f
+                TowerType.CANNON -> 7.2f
+                TowerType.MISSILE -> 5.8f
+                else -> 4.4f
+              }
+            val turnMax = if (overdrive) baseTurn * 1.35f else baseTurn
+            val angleErr = slewTurret(t, desiredAngle, maxTurnSpeed = turnMax, accelRate = turnMax * 2.6f, dt = dt)
+            t.targetLocked = abs(angleErr) < 0.34f
+            if (t.targetLocked && t.cooldownTimer <= 0f) {
               t.cooldownTimer = 1f / t.effectiveFireRate(overdrive)
               t.recoil = 1f
-              spawnTowerProjectile(t, target)
+              spawnTowerProjectile(t, target, aimX, aimY)
             }
+          } else {
+            t.targetLocked = false
+            idleSweepTurret(t, dt)
           }
         }
       }
     }
+  }
+
+  private fun normalizeAngle(rad: Float): Float {
+    var a = rad
+    val twoPi = 2f * PI.toFloat()
+    while (a > PI.toFloat()) a -= twoPi
+    while (a < -PI.toFloat()) a += twoPi
+    return a
+  }
+
+  private fun slewTurret(
+    t: TowerInstance,
+    desiredAngle: Float,
+    maxTurnSpeed: Float,
+    accelRate: Float,
+    dt: Float,
+  ): Float {
+    val err = normalizeAngle(desiredAngle - t.angleRad)
+    val desiredVel = (err * 9.5f).coerceIn(-maxTurnSpeed, maxTurnSpeed)
+    val blend = (accelRate * dt).coerceIn(0f, 1f)
+    t.angularVelocity += (desiredVel - t.angularVelocity) * blend
+    val step = t.angularVelocity * dt
+    val clampedStep =
+      if (abs(err) < 0.03f && abs(t.angularVelocity) < 0.9f) {
+        t.angularVelocity *= 0.5f
+        err * 0.65f
+      } else if (abs(step) > abs(err) && err * step > 0f) {
+        t.angularVelocity *= 0.4f
+        err
+      } else {
+        step
+      }
+    t.angleRad = normalizeAngle(t.angleRad + clampedStep)
+    return normalizeAngle(desiredAngle - t.angleRad)
+  }
+
+  private fun idleSweepTurret(t: TowerInstance, dt: Float) {
+    val restAngle = atan2((t.roadAnchorY - t.y) * viewportAspect, t.roadAnchorX - t.x)
+    val sweepAngle = restAngle + sin(totalTime * 1.15f + t.slotId * 1.37f) * 0.50f
+    slewTurret(t, sweepAngle, maxTurnSpeed = 1.9f, accelRate = 6f, dt = dt)
+  }
+
+  private fun findLaserTargetWithLock(t: TowerInstance): EnemyEntity? {
+    if (t.laserTargetId != -1) {
+      val locked = enemyPool.firstOrNull { it.active && it.id == t.laserTargetId }
+      if (locked != null && distW(t.x, t.y, locked.x, locked.y) <= t.effectiveRange() * 1.08f) {
+        return locked
+      }
+    }
+    return findTarget(t)
+  }
+
+  private fun predictTargetPosition(t: TowerInstance, target: EnemyEntity, dt: Float): Pair<Float, Float> {
+    if (dt <= 0.0001f || target.stunTimer > 0f) return target.x to target.y
+    val dist = distW(t.x, t.y, target.x, target.y)
+    val projSpeed =
+      when (t.type) {
+        TowerType.CANNON -> 1.15f
+        TowerType.GATLING -> 1.75f
+        TowerType.MISSILE -> 0.78f
+        TowerType.MORTAR -> (dist / 0.72f).coerceAtLeast(0.45f)
+        else -> 1.5f
+      }
+    val leadTime =
+      if (t.type == TowerType.MORTAR) 0.55f
+      else (dist / projSpeed).coerceIn(0f, 0.38f)
+    val vx = (target.x - target.prevX) / dt
+    val vy = (target.y - target.prevY) / dt
+    val aimX = (target.x + vx * leadTime * 0.75f).coerceIn(0.03f, 0.97f)
+    val aimY = (target.y + vy * leadTime * 0.75f).coerceIn(0.08f, 0.92f)
+    return aimX to aimY
   }
 
   private fun findTarget(t: TowerInstance): EnemyEntity? {
@@ -923,7 +1054,12 @@ class GameEngine {
     }
   }
 
-  private fun spawnTowerProjectile(t: TowerInstance, target: EnemyEntity) {
+  private fun spawnTowerProjectile(
+    t: TowerInstance,
+    target: EnemyEntity,
+    aimX: Float = target.x,
+    aimY: Float = target.y,
+  ) {
     val p = projectilePool.firstOrNull { !it.active } ?: return
     val muzzleDist = 0.028f
     val sx = t.x + cos(t.angleRad) * muzzleDist
@@ -935,8 +1071,8 @@ class GameEngine {
     p.startY = sy
     p.x = sx
     p.y = sy
-    p.targetX = target.x
-    p.targetY = target.y
+    p.targetX = aimX
+    p.targetY = aimY
     p.targetEnemyId = target.id
     p.damage = t.effectiveDamage()
     p.splashRadius = t.type.splashRadius

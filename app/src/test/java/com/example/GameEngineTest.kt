@@ -74,4 +74,40 @@ class GameEngineTest {
     assertEquals(initialCrystals - AbilityType.CRYO_FREEZE.crystalCost, engine.hudState.value.crystals)
     assertTrue(engine.hudState.value.globalFreezeTimer > 0f)
   }
+
+  @Test
+  fun `laser turret smoothly slews, locks target, ramps up, and emits active beam`() {
+    val engine = GameEngine()
+    engine.startNewGame()
+
+    // Build Laser Tower on slot 0 (overlooking top serpentine leg)
+    val slot0 = CanyonMap.buildSlots[0]
+    engine.buildTower(slot0.id, TowerType.LASER)
+    val laser = engine.towers[slot0.id]!!
+    val initialAngle = laser.angleRad
+
+    engine.triggerNextWaveEarly()
+
+    var sawIdleSweep = false
+    var sawActiveBeam = false
+    var maxRamp = 0f
+
+    // Simulate 8 seconds at 60 FPS as Scout Drones move into range of slot 0
+    repeat(480) {
+      engine.step(1f / 60f)
+      if (!laser.targetLocked && kotlin.math.abs(laser.angleRad - initialAngle) > 0.02f) {
+        sawIdleSweep = true
+      }
+      if (engine.laserBeams.any { it.active }) {
+        sawActiveBeam = true
+        val beam = engine.laserBeams.first { it.active }
+        assertTrue(beam.intensity > 0.7f)
+      }
+      if (laser.laserRamp > maxRamp) maxRamp = laser.laserRamp
+    }
+
+    assertTrue("Laser turret should sweep smoothly while scanning", sawIdleSweep)
+    assertTrue("Laser turret should align, lock target, and emit beam", sawActiveBeam)
+    assertTrue("Laser beam intensity should ramp up during continuous lock", maxRamp > 0.2f)
+  }
 }
