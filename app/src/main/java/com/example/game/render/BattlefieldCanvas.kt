@@ -64,6 +64,7 @@ fun BattlefieldCanvas(
   val textMeasurer = rememberTextMeasurer()
   val sprites = rememberGameSprites()
   val beamArcPath = remember { Path() }
+  val missilePath = remember { Path() }
   val stars = remember {
     val r = Random(1337)
     List(42) {
@@ -217,21 +218,20 @@ fun BattlefieldCanvas(
       }
     }
 
-    // 6. 11 Hexagonal Build Platforms + 9 Tower Models
-    val hexRadius = w * 0.056f
+    // 6. 11 Glowing Blue Build Spots + 9 Tower Models
+    val spotRadius = w * 0.056f
     for (slot in CanyonMap.buildSlots) {
       val c = Offset(slot.x * w, slot.y * h)
       val tower = engine.towers[slot.id]
-      drawHexPlatform(
+      drawBuildSpotCircle(
         center = c,
-        radius = hexRadius,
+        radius = spotRadius,
         isSelected = slot.id == selectedSlotId,
         hasTower = tower != null,
         time = t,
-        padSprite = sprites.pad,
       )
       if (tower != null) {
-        drawTowerModel(tower, c, hexRadius * 0.86f, t, overdriveActive = overdriveTimer > 0f, sprites = sprites)
+        drawTowerModel(tower, c, spotRadius * 0.86f, t, overdriveActive = overdriveTimer > 0f, sprites = sprites)
       }
     }
 
@@ -273,10 +273,13 @@ fun BattlefieldCanvas(
           drawLine(GoldAmber, Offset(tailX, tailY), Offset(px, py), strokeWidth = 2.6f, cap = StrokeCap.Round)
         }
         ProjectileKind.MISSILE -> {
-          rotate(Math.toDegrees(p.angleRad.toDouble()).toFloat(), pivot = Offset(px, py)) {
-            drawLine(EnemyCrimson, Offset(px - 8f, py), Offset(px + 6f, py), strokeWidth = 4.5f, cap = StrokeCap.Round)
-            drawCircle(GoldAmber, radius = 2.5f, center = Offset(px - 9f, py))
-          }
+          drawSciFiMissile(
+            p = p,
+            w = w,
+            h = h,
+            time = t,
+            reusablePath = missilePath,
+          )
         }
         ProjectileKind.MORTAR_BOMB -> {
           val arcLift = sin(p.progress * PI.toFloat()) * w * 0.085f
@@ -643,5 +646,139 @@ private fun DrawScope.drawBeautifulLaserBeam(
       strokeWidth = 2.0f * pxScale,
       cap = StrokeCap.Round,
     )
+  }
+}
+
+private fun DrawScope.drawSciFiMissile(
+  p: com.example.game.model.ProjectileEntity,
+  w: Float,
+  h: Float,
+  time: Float,
+  reusablePath: Path,
+) {
+  val pxScale = (w / 1080f).coerceIn(0.75f, 1.50f)
+  val px = p.x * w
+  val py = p.y * h
+  val count = p.trailCount
+
+  // 1. Curved glowing contrail + smoky wake ribbon along flight path
+  if (count >= 2) {
+    for (i in 0 until count - 1) {
+      val frac = (i + 1).toFloat() / count.toFloat()
+      val a = Offset(p.trailX[i] * w, p.trailY[i] * h)
+      val b = Offset(p.trailX[i + 1] * w, p.trailY[i + 1] * h)
+      drawLine(
+        color = Color(0xFF94A3B8).copy(alpha = 0.34f * frac),
+        start = a,
+        end = b,
+        strokeWidth = (2.5f + 5.5f * frac) * pxScale,
+        cap = StrokeCap.Round,
+      )
+      if (frac > 0.35f) {
+        val hotFrac = ((frac - 0.35f) / 0.65f).coerceIn(0f, 1f)
+        drawLine(
+          color = EnemyEmber.copy(alpha = 0.72f * hotFrac),
+          start = a,
+          end = b,
+          strokeWidth = (1.8f + 3.2f * hotFrac) * pxScale,
+          cap = StrokeCap.Round,
+        )
+        drawLine(
+          color = GoldAmber.copy(alpha = 0.90f * hotFrac * hotFrac),
+          start = a,
+          end = b,
+          strokeWidth = 1.6f * pxScale,
+          cap = StrokeCap.Round,
+        )
+      }
+    }
+  }
+
+  val flicker = 0.84f + 0.24f * sin(time * 55f + p.curvePhase)
+
+  // Subtle ground shadow underneath missile
+  drawOval(
+    color = Color(0x55000000),
+    topLeft = Offset(px - 5f * pxScale, py + 7f * pxScale),
+    size = Size(10f * pxScale, 5f * pxScale),
+  )
+
+  val deg = Math.toDegrees(p.angleRad.toDouble()).toFloat()
+  rotate(degrees = deg, pivot = Offset(px, py)) {
+    val tailX = px - 9.5f * pxScale
+    val noseX = px + 10.5f * pxScale
+
+    // 2. Thruster radial glow halo
+    drawCircle(
+      brush =
+        Brush.radialGradient(
+          colors = listOf(GoldAmber.copy(alpha = 0.75f), EnemyEmber.copy(alpha = 0.35f), Color.Transparent),
+          center = Offset(tailX - 2f * pxScale, py),
+          radius = 15f * pxScale * flicker,
+        ),
+      radius = 15f * pxScale * flicker,
+      center = Offset(tailX - 2f * pxScale, py),
+    )
+
+    // 3. Flickering multi-layer afterburner flame cone
+    val flameTipX = tailX - (13f * pxScale * flicker)
+    reusablePath.reset()
+    reusablePath.moveTo(tailX, py - 3.6f * pxScale)
+    reusablePath.lineTo(flameTipX, py)
+    reusablePath.lineTo(tailX, py + 3.6f * pxScale)
+    reusablePath.close()
+    drawPath(reusablePath, EnemyEmber.copy(alpha = 0.90f))
+
+    reusablePath.reset()
+    reusablePath.moveTo(tailX, py - 2.1f * pxScale)
+    reusablePath.lineTo(tailX - (8.5f * pxScale * flicker), py)
+    reusablePath.lineTo(tailX, py + 2.1f * pxScale)
+    reusablePath.close()
+    drawPath(reusablePath, GoldAmber)
+
+    drawCircle(Color.White, radius = 2.0f * pxScale, center = Offset(tailX - 1.5f * pxScale, py))
+
+    // 4. Swept tail stabilizer fins
+    reusablePath.reset()
+    reusablePath.moveTo(tailX + 4.5f * pxScale, py - 2.0f * pxScale)
+    reusablePath.lineTo(tailX - 1.2f * pxScale, py - 6.2f * pxScale)
+    reusablePath.lineTo(tailX + 0.8f * pxScale, py - 2.0f * pxScale)
+    reusablePath.close()
+    drawPath(reusablePath, EnemyCrimson)
+
+    reusablePath.reset()
+    reusablePath.moveTo(tailX + 4.5f * pxScale, py + 2.0f * pxScale)
+    reusablePath.lineTo(tailX - 1.2f * pxScale, py + 6.2f * pxScale)
+    reusablePath.lineTo(tailX + 0.8f * pxScale, py + 2.0f * pxScale)
+    reusablePath.close()
+    drawPath(reusablePath, EnemyCrimson)
+
+    // 5. Sleek metallic missile body + crimson warhead nose
+    drawLine(
+      color = Color(0xFFE2E8F0),
+      start = Offset(tailX + 1.5f * pxScale, py),
+      end = Offset(px + 4.5f * pxScale, py),
+      strokeWidth = 4.6f * pxScale,
+      cap = StrokeCap.Butt,
+    )
+    drawLine(
+      color = EnemyCrimson,
+      start = Offset(px + 3.5f * pxScale, py),
+      end = Offset(px + 7.5f * pxScale, py),
+      strokeWidth = 4.2f * pxScale,
+      cap = StrokeCap.Butt,
+    )
+
+    // Sharp pointed nose cone
+    reusablePath.reset()
+    reusablePath.moveTo(px + 6.5f * pxScale, py - 2.3f * pxScale)
+    reusablePath.lineTo(noseX, py)
+    reusablePath.lineTo(px + 6.5f * pxScale, py + 2.3f * pxScale)
+    reusablePath.close()
+    drawPath(reusablePath, EnemyCrimson)
+
+    // Glowing seeker eye at nose tip
+    drawCircle(Color(0xFF00E5FF), radius = 1.8f * pxScale, center = Offset(noseX - 1.5f * pxScale, py))
+    drawCircle(Color.White, radius = 0.9f * pxScale, center = Offset(noseX - 1.5f * pxScale, py))
   }
 }

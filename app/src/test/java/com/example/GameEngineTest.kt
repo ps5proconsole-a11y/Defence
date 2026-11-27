@@ -110,4 +110,56 @@ class GameEngineTest {
     assertTrue("Laser turret should align, lock target, and emit beam", sawActiveBeam)
     assertTrue("Laser beam intensity should ramp up during continuous lock", maxRamp > 0.2f)
   }
+
+  @Test
+  fun `missile tower launches curved spiraling missiles with trail and tracks targets`() {
+    val engine = GameEngine()
+    engine.startNewGame()
+
+    val slot0 = CanyonMap.buildSlots[0]
+    engine.buildTower(slot0.id, TowerType.MISSILE)
+    val missileTower = engine.towers[slot0.id]!!
+
+    // Separate engine instance so both Missile (150g) and Freeze (200g) fit within 320g starting gold
+    val freezeEngine = GameEngine()
+    freezeEngine.startNewGame()
+    val slot1 = CanyonMap.buildSlots[0]
+    freezeEngine.buildTower(slot1.id, TowerType.FREEZE)
+    val freezeTower = freezeEngine.towers[slot1.id]!!
+
+    engine.triggerNextWaveEarly()
+    freezeEngine.triggerNextWaveEarly()
+
+    var sawCurvedTrail = false
+    var sawMissileLock = false
+    var sawFreezeLock = false
+    var maxDeviationFromStraightLine = 0f
+
+    repeat(540) {
+      engine.step(1f / 60f)
+      freezeEngine.step(1f / 60f)
+      if (missileTower.targetLocked) sawMissileLock = true
+      if (freezeTower.targetLocked) sawFreezeLock = true
+
+      for (p in engine.projectilePool) {
+        if (p.active && p.kind == com.example.game.model.ProjectileKind.MISSILE && p.trailCount >= 5) {
+          sawCurvedTrail = true
+          // Measure perpendicular distance of missile from straight line between start and target
+          val lx = p.targetX - p.startX
+          val ly = p.targetY - p.startY
+          val lineLen = kotlin.math.hypot(lx, ly)
+          if (lineLen > 0.02f) {
+            val cross = kotlin.math.abs((p.x - p.startX) * ly - (p.y - p.startY) * lx) / lineLen
+            if (cross > maxDeviationFromStraightLine) maxDeviationFromStraightLine = cross
+          }
+        }
+      }
+    }
+
+    assertTrue("Missile turret should track and lock onto enemies", sawMissileLock)
+    assertTrue("Freeze tower should also track enemies in aura", sawFreezeLock)
+    assertTrue("Missile should record curved contrail history", sawCurvedTrail)
+    assertTrue("Missile trajectory should curve noticeably off a straight line", maxDeviationFromStraightLine > 0.008f)
+    assertTrue("Missiles should destroy or damage enemies", engine.hudState.value.totalKills > 0)
+  }
 }

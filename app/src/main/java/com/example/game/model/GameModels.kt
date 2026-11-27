@@ -484,6 +484,12 @@ class ProjectileEntity {
   var color: Color = NeonCyan
   var angleRad: Float = 0f
   var smokeTimer: Float = 0f
+  var curveSign: Float = 1f
+  var curvePhase: Float = 0f
+  var age: Float = 0f
+  val trailX: FloatArray = FloatArray(12)
+  val trailY: FloatArray = FloatArray(12)
+  var trailCount: Int = 0
 }
 
 class ParticleEntity {

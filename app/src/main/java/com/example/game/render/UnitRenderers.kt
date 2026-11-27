@@ -3,6 +3,7 @@ package com.example.game.render
 import androidx.compose.ui.geometry.CornerRadius
 import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.geometry.Size
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.ColorFilter
 import androidx.compose.ui.graphics.ImageBitmap
@@ -10,7 +11,6 @@ import androidx.compose.ui.graphics.Path
 import androidx.compose.ui.graphics.drawscope.DrawScope
 import androidx.compose.ui.graphics.drawscope.Stroke
 import androidx.compose.ui.graphics.drawscope.rotate
-import androidx.compose.ui.graphics.drawscope.scale
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.IntSize
 import com.example.game.model.EnemyEntity
@@ -28,56 +28,70 @@ import kotlin.math.cos
 import kotlin.math.roundToInt
 import kotlin.math.sin
 
-fun DrawScope.drawHexPlatform(
+fun DrawScope.drawBuildSpotCircle(
   center: Offset,
   radius: Float,
   isSelected: Boolean,
   hasTower: Boolean,
   time: Float,
-  padSprite: ImageBitmap? = null,
 ) {
-  val pulse = 0.55f + 0.45f * sin(time * 3.2f)
+  if (hasTower) {
+    // Build circle disappears once a tower is placed; only show selection ring when selected
+    if (isSelected) {
+      drawCircle(
+        color = NeonCyan.copy(alpha = 0.85f),
+        radius = radius * 1.06f,
+        center = center,
+        style = Stroke(width = 2.8f),
+      )
+    }
+    return
+  }
 
-  // Drop shadow
-  drawOval(
-    color = Color(0x9902040A),
-    topLeft = Offset(center.x - radius * 1.08f, center.y - radius * 0.65f),
-    size = Size(radius * 2.16f, radius * 1.72f),
+  val pulse = 0.55f + 0.45f * sin(time * 3.2f)
+  val glowRadius = if (isSelected) radius * 1.16f else radius * 1.05f
+  val ringRadius = if (isSelected) radius * 0.94f else radius * 0.88f
+
+  // Soft blue radial glow on the terrain
+  drawCircle(
+    brush =
+      Brush.radialGradient(
+        colors =
+          listOf(
+            Color(0xFF00B0FF).copy(alpha = if (isSelected) 0.36f else 0.24f * pulse),
+            Color(0xFF2979FF).copy(alpha = if (isSelected) 0.16f else 0.09f * pulse),
+            Color.Transparent,
+          ),
+        center = center,
+        radius = glowRadius,
+      ),
+    radius = glowRadius,
+    center = center,
   )
 
-  if (padSprite != null) {
-    val side = (radius * 2.28f).roundToInt().coerceAtLeast(16)
-    val half = side / 2
-    drawImage(
-      image = padSprite,
-      dstOffset = IntOffset((center.x - half).roundToInt(), (center.y - half).roundToInt()),
-      dstSize = IntSize(side, side),
-    )
-  } else {
-    val hexPath = buildHexPath(center, radius)
-    drawPath(path = hexPath, color = Color(0xFF1A253A))
-    drawPath(path = hexPath, color = NeonCyan.copy(alpha = 0.45f), style = Stroke(width = 1.8f))
-  }
+  // Outer blue bloom halo
+  drawCircle(
+    color = Color(0xFF2979FF).copy(alpha = if (isSelected) 0.55f else 0.26f + 0.20f * pulse),
+    radius = ringRadius,
+    center = center,
+    style = Stroke(width = if (isSelected) 7.5f else 5.5f),
+  )
 
-  if (isSelected) {
-    drawCircle(
-      color = NeonCyan.copy(alpha = 0.85f),
-      radius = radius * 1.15f,
-      center = center,
-      style = Stroke(width = 3.0f),
-    )
-  } else if (!hasTower) {
-    drawCircle(
-      color = NeonCyan.copy(alpha = 0.25f + 0.30f * pulse),
-      radius = radius * 1.06f,
-      center = center,
-      style = Stroke(width = 1.5f),
-    )
-    val cross = radius * 0.24f
-    val cColor = NeonCyan.copy(alpha = 0.40f + 0.35f * pulse)
-    drawLine(cColor, Offset(center.x - cross, center.y), Offset(center.x + cross, center.y), strokeWidth = 2f)
-    drawLine(cColor, Offset(center.x, center.y - cross), Offset(center.x, center.y + cross), strokeWidth = 2f)
-  }
+  // Crisp glowing blue ring
+  drawCircle(
+    color = Color(0xFF00B0FF).copy(alpha = if (isSelected) 0.98f else 0.68f + 0.26f * pulse),
+    radius = ringRadius,
+    center = center,
+    style = Stroke(width = if (isSelected) 3.2f else 2.4f),
+  )
+
+  // Subtle inner neon cyan highlight
+  drawCircle(
+    color = NeonCyan.copy(alpha = if (isSelected) 0.90f else 0.40f + 0.30f * pulse),
+    radius = ringRadius * 0.92f,
+    center = center,
+    style = Stroke(width = 1.2f),
+  )
 }
 
 fun DrawScope.drawTowerModel(
@@ -89,6 +103,13 @@ fun DrawScope.drawTowerModel(
   sprites: GameSprites? = null,
 ) {
   val accent = tower.type.accentColor
+
+  // Soft contact shadow directly on the canyon ground
+  drawOval(
+    color = Color(0x8802040A),
+    topLeft = Offset(center.x - baseRadius * 1.05f, center.y - baseRadius * 0.62f),
+    size = Size(baseRadius * 2.10f, baseRadius * 1.56f),
+  )
 
   if (overdriveActive) {
     drawCircle(
@@ -165,27 +186,19 @@ fun DrawScope.drawTowerModel(
           center = muzzleTip,
         )
       }
-    } else {
-      // 2.5D upright isometric model with subtle recoil kick + facing flip
+    } else if (tower.type in setOf(TowerType.CANNON, TowerType.GATLING, TowerType.MISSILE, TowerType.MORTAR)) {
+      // Directional weapon turrets: smoothly rotate 360 degrees to track target
       val recoilPush = tower.recoil * baseRadius * 0.16f
       val drawCenter =
         Offset(
           center.x - cos(tower.angleRad) * recoilPush,
-          center.y - sin(tower.angleRad) * recoilPush - baseRadius * 0.10f,
+          center.y - sin(tower.angleRad) * recoilPush,
         )
-      val spriteSide = (baseRadius * 2.42f * scaleFactor).roundToInt().coerceAtLeast(16)
+      val spriteSide = (baseRadius * 2.50f * scaleFactor).roundToInt().coerceAtLeast(18)
       val half = spriteSide / 2
+      val rotationDeg = Math.toDegrees(tower.angleRad.toDouble()).toFloat() + 90f
 
-      val mirrorX =
-        if (tower.type in setOf(TowerType.CANNON, TowerType.GATLING, TowerType.MISSILE, TowerType.MORTAR) &&
-          cos(tower.angleRad) < -0.15f
-        ) {
-          -1f
-        } else {
-          1f
-        }
-
-      scale(scaleX = mirrorX, scaleY = 1f, pivot = drawCenter) {
+      rotate(degrees = rotationDeg, pivot = drawCenter) {
         drawImage(
           image = sprite,
           dstOffset = IntOffset((drawCenter.x - half).roundToInt(), (drawCenter.y - half).roundToInt()),
@@ -193,15 +206,69 @@ fun DrawScope.drawTowerModel(
         )
       }
 
-      // Subtle directional muzzle flash/emitter indicator toward target
-      if (tower.recoil > 0.25f) {
-        val tip =
-          Offset(
-            center.x + cos(tower.angleRad) * baseRadius * 0.88f,
-            center.y + sin(tower.angleRad) * baseRadius * 0.88f,
-          )
-        drawCircle(accent.copy(alpha = 0.75f * tower.recoil), radius = baseRadius * 0.28f, center = tip)
+      val dirX = cos(tower.angleRad)
+      val dirY = sin(tower.angleRad)
+      val muzzleTip = Offset(drawCenter.x + dirX * (baseRadius * 0.96f), drawCenter.y + dirY * (baseRadius * 0.96f))
+
+      // Subtle holographic sight indicator when locked onto an enemy
+      if (tower.targetLocked) {
+        val sightEnd = Offset(drawCenter.x + dirX * (baseRadius * 1.65f), drawCenter.y + dirY * (baseRadius * 1.65f))
+        drawLine(
+          color = accent.copy(alpha = 0.32f),
+          start = muzzleTip,
+          end = sightEnd,
+          strokeWidth = 1.6f,
+        )
+        drawCircle(color = accent.copy(alpha = 0.72f), radius = baseRadius * 0.12f, center = muzzleTip)
       }
+
+      // Muzzle flash burst on shot
+      if (tower.recoil > 0.20f) {
+        drawCircle(accent.copy(alpha = 0.65f * tower.recoil), radius = baseRadius * 0.34f, center = muzzleTip)
+        drawCircle(Color.White.copy(alpha = 0.85f * tower.recoil), radius = baseRadius * 0.15f, center = muzzleTip)
+      }
+    } else {
+      // Symmetric energy spires & domes (TESLA, EMP, FREEZE, SHIELD) + orbiting directional tracker head
+      val recoilPush = tower.recoil * baseRadius * 0.10f
+      val drawCenter =
+        Offset(
+          center.x - cos(tower.angleRad) * recoilPush * 0.5f,
+          center.y - sin(tower.angleRad) * recoilPush * 0.5f - baseRadius * 0.08f,
+        )
+      val spriteSide = (baseRadius * 2.42f * scaleFactor).roundToInt().coerceAtLeast(16)
+      val half = spriteSide / 2
+
+      drawImage(
+        image = sprite,
+        dstOffset = IntOffset((drawCenter.x - half).roundToInt(), (drawCenter.y - half).roundToInt()),
+        dstSize = IntSize(spriteSide, spriteSide),
+      )
+
+      // Orbiting target-tracking emitter & directional chevron around the turret ring
+      val ringR = baseRadius * 0.96f
+      drawCircle(
+        color = accent.copy(alpha = if (tower.targetLocked) 0.42f else 0.18f),
+        radius = ringR,
+        center = center,
+        style = Stroke(width = 1.4f),
+      )
+      val dirX = cos(tower.angleRad)
+      val dirY = sin(tower.angleRad)
+      val normX = -dirY
+      val normY = dirX
+      val emitterPos = Offset(center.x + dirX * ringR, center.y + dirY * ringR)
+      val tipPos = Offset(center.x + dirX * (ringR + baseRadius * 0.28f), center.y + dirY * (ringR + baseRadius * 0.28f))
+      val wingL = Offset(emitterPos.x - dirX * baseRadius * 0.08f + normX * baseRadius * 0.18f, emitterPos.y - dirY * baseRadius * 0.08f + normY * baseRadius * 0.18f)
+      val wingR = Offset(emitterPos.x - dirX * baseRadius * 0.08f - normX * baseRadius * 0.18f, emitterPos.y - dirY * baseRadius * 0.08f - normY * baseRadius * 0.18f)
+
+      drawCircle(
+        color = accent.copy(alpha = if (tower.targetLocked) 0.55f else 0.25f),
+        radius = baseRadius * 0.22f,
+        center = emitterPos,
+      )
+      drawLine(accent.copy(alpha = 0.92f), wingL, tipPos, strokeWidth = 2.2f)
+      drawLine(accent.copy(alpha = 0.92f), wingR, tipPos, strokeWidth = 2.2f)
+      drawCircle(color = Color.White.copy(alpha = if (tower.targetLocked) 0.95f else 0.60f), radius = baseRadius * 0.09f, center = emitterPos)
     }
   } else {
     drawCircle(accent, radius = baseRadius * 0.6f, center = center)

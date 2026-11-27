@@ -91,7 +91,7 @@ fun TowerBuildSheet(
     ) {
       Column {
         Text(
-          text = "ПЛАТФОРМА #${slotId + 1} — СТРОИТЕЛЬСТВО",
+          text = "ПОЗИЦИЯ #${slotId + 1} — СТРОИТЕЛЬСТВО",
           style = MaterialTheme.typography.titleMedium,
           color = NeonCyan,
           fontSize = 13.sp,

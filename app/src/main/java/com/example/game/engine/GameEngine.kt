@@ -74,6 +74,7 @@ class GameEngine {
   private var betweenWaveTimer = 0f
   private var waveSpawningActive = false
   private var statusBannerTimer = 0f
+  private var missileLaunchParity = 0
 
   private val abilityCooldowns = mutableMapOf<AbilityType, Float>().apply {
     AbilityType.entries.forEach { put(it, 0f) }
@@ -137,7 +138,7 @@ class GameEngine {
         betweenWaveCountdown = betweenWaveTimer,
         speedMultiplier = 1,
         abilityCooldowns = abilityCooldowns.toMap(),
-        statusBanner = "Разместите башни на гекса-платформах",
+        statusBanner = "Разместите башни на синих кругах",
       )
     renderTick++
   }
@@ -492,13 +493,11 @@ class GameEngine {
       }
     }
 
-    // Update enemies
+    // Update enemies, towers & projectiles, then sync HUD if kills/gold/HP changed
     val killsBefore = totalKills
+    val goldBefore = gold
     val hpBefore = baseHp
     updateEnemies(dt)
-    if (totalKills != killsBefore || baseHp != hpBefore) {
-      hudNeedsSync = true
-    }
 
     if (baseHp <= 0) {
       baseHp = 0
@@ -516,6 +515,9 @@ class GameEngine {
     updateProjectiles(dt)
     updateEffects(dt)
 
+    if (totalKills != killsBefore || gold != goldBefore || baseHp != hpBefore) {
+      hudNeedsSync = true
+    }
     if (hudNeedsSync || cooldownChanged) {
       syncHud()
     }
@@ -766,8 +768,18 @@ class GameEngine {
 
       when (t.type) {
         TowerType.FREEZE -> {
-          // Continuous aura slow + periodic frost pulse damage
+          // Continuous aura slow + periodic frost pulse damage + track nearest target in aura
           val range = t.effectiveRange()
+          val primaryTarget = findTarget(t)
+          if (primaryTarget != null) {
+            val desiredAngle = atan2((primaryTarget.y - t.y) * viewportAspect, primaryTarget.x - t.x)
+            val err = slewTurret(t, desiredAngle, maxTurnSpeed = if (overdrive) 7.5f else 5.5f, accelRate = 15f, dt = dt)
+            t.targetLocked = abs(err) < 0.42f
+          } else {
+            t.targetLocked = false
+            idleSweepTurret(t, dt)
+          }
+
           var hasTargets = false
           for (e in enemyPool) {
             if (!e.active) continue
@@ -779,6 +791,7 @@ class GameEngine {
           }
           if (hasTargets && t.cooldownTimer <= 0f) {
             t.cooldownTimer = 1f / t.effectiveFireRate(overdrive)
+            t.recoil = 0.45f
             spawnShockwave(t.x, t.y, range, IceBlue, 0.5f)
             for (e in enemyPool) {
               if (e.active && distW(t.x, t.y, e.x, e.y) <= range) {
@@ -786,12 +799,29 @@ class GameEngine {
               }
             }
           }
-          t.angleRad += dt * 1.4f
         }
 
         TowerType.SHIELD -> {
-          // Gentle zap to enemies held near dome
-          t.angleRad += dt * 0.9f
+          // Track nearest ground threat near dome/range + zap held enemies
+          var watchTarget: EnemyEntity? = null
+          var bestDist = t.effectiveRange() * 1.15f
+          for (e in enemyPool) {
+            if (!e.active || e.type.isFlying) continue
+            val d = distW(t.x, t.y, e.x, e.y)
+            if (d < bestDist) {
+              bestDist = d
+              watchTarget = e
+            }
+          }
+          if (watchTarget != null) {
+            val desiredAngle = atan2((watchTarget.y - t.y) * viewportAspect, watchTarget.x - t.x)
+            val err = slewTurret(t, desiredAngle, maxTurnSpeed = if (overdrive) 8.0f else 6.0f, accelRate = 16f, dt = dt)
+            t.targetLocked = abs(err) < 0.45f
+          } else {
+            t.targetLocked = false
+            idleSweepTurret(t, dt)
+          }
+
           if (t.cooldownTimer <= 0f && t.shieldOverloadTimer <= 0f) {
             t.cooldownTimer = 1f / t.effectiveFireRate(overdrive)
             for (e in enemyPool) {
@@ -872,26 +902,33 @@ class GameEngine {
 
         TowerType.EMP -> {
           val target = findTarget(t)
-          if (target != null && t.cooldownTimer <= 0f) {
-            t.cooldownTimer = 1f / t.effectiveFireRate(overdrive)
-            t.recoil = 1f
-            spawnShockwave(t.x, t.y, t.effectiveRange(), CrystalViolet, 0.42f)
-            for (e in enemyPool) {
-              if (!e.active) continue
-              if (distW(t.x, t.y, e.x, e.y) <= t.effectiveRange()) {
-                e.empTimer = maxOf(e.empTimer, t.type.empDuration + (t.level - 1) * 0.8f)
-                e.slowTimer = maxOf(e.slowTimer, 1.5f)
-                e.slowStrength = maxOf(e.slowStrength, t.effectiveSlow())
-                // EMP deals bonus shield damage
-                if (e.shield > 0f) {
-                  e.shield = (e.shield - t.effectiveDamage() * 2.5f).coerceAtLeast(0f)
+          if (target != null) {
+            val desiredAngle = atan2((target.y - t.y) * viewportAspect, target.x - t.x)
+            val err = slewTurret(t, desiredAngle, maxTurnSpeed = if (overdrive) 9.5f else 7.2f, accelRate = 18f, dt = dt)
+            t.targetLocked = abs(err) < 0.45f
+            if (t.cooldownTimer <= 0f) {
+              t.cooldownTimer = 1f / t.effectiveFireRate(overdrive)
+              t.recoil = 1f
+              spawnShockwave(t.x, t.y, t.effectiveRange(), CrystalViolet, 0.42f)
+              for (e in enemyPool) {
+                if (!e.active) continue
+                if (distW(t.x, t.y, e.x, e.y) <= t.effectiveRange()) {
+                  e.empTimer = maxOf(e.empTimer, t.type.empDuration + (t.level - 1) * 0.8f)
+                  e.slowTimer = maxOf(e.slowTimer, 1.5f)
+                  e.slowStrength = maxOf(e.slowStrength, t.effectiveSlow())
+                  // EMP deals bonus shield damage
+                  if (e.shield > 0f) {
+                    e.shield = (e.shield - t.effectiveDamage() * 2.5f).coerceAtLeast(0f)
+                  }
+                  damageEnemy(e, t.effectiveDamage(), t.slotId, ignoreArmor = true)
+                  spawnLightningArc(t.x, t.y, e.x, e.y, CrystalViolet, 2.5f, 0.18f)
                 }
-                damageEnemy(e, t.effectiveDamage(), t.slotId, ignoreArmor = true)
-                spawnLightningArc(t.x, t.y, e.x, e.y, CrystalViolet, 2.5f, 0.18f)
               }
             }
+          } else {
+            t.targetLocked = false
+            idleSweepTurret(t, dt)
           }
-          t.angleRad = normalizeAngle(t.angleRad + dt * 1.8f)
         }
 
         TowerType.CANNON,
@@ -1061,49 +1098,74 @@ class GameEngine {
     aimY: Float = target.y,
   ) {
     val p = projectilePool.firstOrNull { !it.active } ?: return
-    val muzzleDist = 0.028f
-    val sx = t.x + cos(t.angleRad) * muzzleDist
-    val sy = t.y + sin(t.angleRad) * muzzleDist / viewportAspect
+    val muzzleDist =
+      when (t.type) {
+        TowerType.MISSILE -> 0.044f
+        TowerType.CANNON, TowerType.GATLING, TowerType.MORTAR -> 0.050f
+        else -> 0.032f
+      }
+    var sx = t.x + cos(t.angleRad) * muzzleDist
+    var sy = t.y + sin(t.angleRad) * muzzleDist / viewportAspect
 
     p.active = true
     p.sourceSlotId = t.slotId
-    p.startX = sx
-    p.startY = sy
-    p.x = sx
-    p.y = sy
     p.targetX = aimX
     p.targetY = aimY
     p.targetEnemyId = target.id
     p.damage = t.effectiveDamage()
     p.splashRadius = t.type.splashRadius
     p.color = t.type.accentColor
-    p.angleRad = t.angleRad
     p.progress = 0f
     p.smokeTimer = 0f
+    p.age = 0f
+    p.trailCount = 0
 
     when (t.type) {
       TowerType.CANNON -> {
         p.kind = ProjectileKind.CANNON_SHELL
         p.speed = 1.15f
+        p.angleRad = t.angleRad
         spawnBurstParticles(sx, sy, EnemyEmber, 4, 0.07f)
       }
       TowerType.GATLING -> {
         p.kind = ProjectileKind.GATLING_TRACER
         p.speed = 1.75f
+        p.angleRad = t.angleRad
         spawnBurstParticles(sx, sy, GoldAmber, 2, 0.05f)
       }
       TowerType.MISSILE -> {
         p.kind = ProjectileKind.MISSILE
-        p.speed = 0.78f
-        spawnBurstParticles(sx, sy, EnemyCrimson, 5, 0.08f)
+        p.speed = 0.56f
+        val sideSign = if ((missileLaunchParity++ % 2) == 0) 1f else -1f
+        p.curveSign = sideSign
+        p.curvePhase = rng.nextFloat() * 6.28f
+        // Offset launch point to left or right twin launcher pod
+        val podLat = 0.015f * sideSign
+        sx += -sin(t.angleRad) * podLat
+        sy += cos(t.angleRad) * podLat / viewportAspect
+        // Kick missile outward at an arcing angle so trajectory curves dramatically
+        p.angleRad = normalizeAngle(t.angleRad + sideSign * 0.68f)
+        spawnBurstParticles(sx, sy, GoldAmber, 5, 0.09f)
+        spawnBurstParticles(sx, sy, EnemyCrimson, 4, 0.07f)
       }
       TowerType.MORTAR -> {
         p.kind = ProjectileKind.MORTAR_BOMB
         p.flightDuration = 0.72f
+        p.angleRad = t.angleRad
         spawnBurstParticles(sx, sy, EnemyEmber, 7, 0.10f)
       }
-      else -> Unit
+      else -> {
+        p.angleRad = t.angleRad
+      }
     }
+
+    p.startX = sx
+    p.startY = sy
+    p.x = sx
+    p.y = sy
+    p.trailX[0] = sx
+    p.trailY[0] = sy
+    p.trailCount = 1
   }
 
   private fun updateProjectiles(dt: Float) {
@@ -1133,16 +1195,74 @@ class GameEngine {
       val dx = p.targetX - p.x
       val dy = (p.targetY - p.y) * viewportAspect
       val dist = hypot(dx, dy)
-      val step = p.speed * dt
 
       if (p.kind == ProjectileKind.MISSILE) {
+        p.age += dt
+        val curSpeed = (0.56f + p.age * 1.15f).coerceAtMost(1.24f)
+        p.speed = curSpeed
+        val step = curSpeed * dt
+
+        if (dist <= step + 0.018f || p.age > 4.0f) {
+          p.active = false
+          spawnShockwave(p.targetX, p.targetY, p.splashRadius, p.color, 0.36f)
+          spawnShockwave(p.targetX, p.targetY, p.splashRadius * 0.55f, GoldAmber, 0.24f)
+          spawnBurstParticles(p.targetX, p.targetY, EnemyEmber, 14, 0.17f)
+          spawnBurstParticles(p.targetX, p.targetY, GoldAmber, 8, 0.12f)
+          applyAreaDamage(p.targetX, p.targetY, p.splashRadius, p.damage, stunSeconds = 0f, empSeconds = 0f, sourceSlotId = p.sourceSlotId, hitAir = true)
+          continue
+        }
+
+        // Curved & spiraling homing guidance: wide sweeping corkscrew mid-flight, tightening for terminal impact
+        val directBearing = atan2(dy, dx)
+        val spiralAmp = ((dist - 0.032f) / 0.15f).coerceIn(0f, 1f) * 1.08f
+        val spiralWave = sin(p.age * 11.5f + p.curvePhase) * spiralAmp * p.curveSign
+        val launchFlare = ((0.22f - p.age) / 0.22f).coerceIn(0f, 1f) * 0.52f * p.curveSign
+        val desiredAngle = normalizeAngle(directBearing + spiralWave + launchFlare)
+
+        val turnRate = 5.6f + (1f - (dist / 0.28f).coerceIn(0f, 1f)) * 10.5f
+        val angleErr = normalizeAngle(desiredAngle - p.angleRad)
+        val maxTurn = turnRate * dt
+        p.angleRad = normalizeAngle(p.angleRad + angleErr.coerceIn(-maxTurn, maxTurn))
+
+        p.x += cos(p.angleRad) * curSpeed * dt
+        p.y += sin(p.angleRad) * curSpeed * dt / viewportAspect
+
+        // Record curved exhaust trail coordinates
+        val maxTrail = p.trailX.size
+        if (p.trailCount < maxTrail) {
+          p.trailX[p.trailCount] = p.x
+          p.trailY[p.trailCount] = p.y
+          p.trailCount++
+        } else {
+          for (i in 0 until maxTrail - 1) {
+            p.trailX[i] = p.trailX[i + 1]
+            p.trailY[i] = p.trailY[i + 1]
+          }
+          p.trailX[maxTrail - 1] = p.x
+          p.trailY[maxTrail - 1] = p.y
+        }
+
+        // Rich exhaust smoke + glowing thruster ember particles
         p.smokeTimer -= dt
         if (p.smokeTimer <= 0f) {
-          p.smokeTimer = 0.03f
-          spawnSingleParticle(p.x, p.y, Color(0xFF94A3B8), radius = 2.6f, life = 0.25f)
+          p.smokeTimer = 0.018f
+          val tailX = p.x - cos(p.angleRad) * 0.012f
+          val tailY = p.y - sin(p.angleRad) * 0.012f / viewportAspect
+          spawnSingleParticle(tailX, tailY, Color(0xFFCBD5E1), radius = 3.0f, life = 0.34f)
+          if (rng.nextFloat() < 0.72f) {
+            spawnSingleParticle(
+              tailX,
+              tailY,
+              if (rng.nextBoolean()) GoldAmber else EnemyEmber,
+              radius = 2.4f,
+              life = 0.16f,
+            )
+          }
         }
+        continue
       }
 
+      val step = p.speed * dt
       if (dist <= step + 0.015f) {
         p.active = false
         if (p.splashRadius > 0f) {

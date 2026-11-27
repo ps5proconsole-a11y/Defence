@@ -15,7 +15,6 @@ data class GameSprites(
   val towers: Map<TowerType, ImageBitmap>,
   val enemies: Map<EnemyType, ImageBitmap>,
   val abilities: Map<AbilityType, ImageBitmap>,
-  val pad: ImageBitmap,
   val portal: ImageBitmap,
   val baseGate: ImageBitmap,
   val rocks: ImageBitmap,
@@ -49,7 +48,6 @@ fun rememberGameSprites(): GameSprites {
   val abMissile = ImageBitmap.imageResource(R.drawable.sprite_ability_missile)
   val abOrbital = ImageBitmap.imageResource(R.drawable.sprite_ability_orbital)
 
-  val pad = ImageBitmap.imageResource(R.drawable.sprite_env_pad)
   val portal = ImageBitmap.imageResource(R.drawable.sprite_env_portal)
   val baseGate = ImageBitmap.imageResource(R.drawable.sprite_env_base)
   val rocks = ImageBitmap.imageResource(R.drawable.sprite_env_rocks)
@@ -78,7 +76,6 @@ fun rememberGameSprites(): GameSprites {
     abFreeze,
     abMissile,
     abOrbital,
-    pad,
     portal,
     baseGate,
     rocks,
@@ -116,7 +113,6 @@ fun rememberGameSprites(): GameSprites {
           AbilityType.MISSILE_BARRAGE to abMissile,
           AbilityType.ORBITAL_OVERDRIVE to abOrbital,
         ),
-      pad = pad,
       portal = portal,
       baseGate = baseGate,
       rocks = rocks,
